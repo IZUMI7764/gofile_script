@@ -38,7 +38,13 @@ sep
 PRODUCT_BASE="out/target/product"
 
 log "Detecting device..."
-DEVICE=$(ls -1 "$PRODUCT_BASE" | grep -vE '^(generic|symbols|obj)$' | head -n 1)
+
+DEVICE=$(find "$PRODUCT_BASE" -mindepth 1 -maxdepth 1 -type d \
+    ! -name generic \
+    ! -name obj \
+    ! -name symbols \
+    -printf "%f\n" | head -n 1)
+
 PRODUCT_DIR="$PRODUCT_BASE/$DEVICE"
 
 if [[ -z "$DEVICE" || ! -d "$PRODUCT_DIR" ]]; then
@@ -51,7 +57,11 @@ log "Device detected: $DEVICE"
 
 sep
 log "Searching for ROM zip..."
-ROM_ZIP=$(find "$PRODUCT_DIR" -name "*.zip" | grep -Ev "ota|symbol" | head -n 1)
+
+ROM_ZIP=$(find "$PRODUCT_DIR" -type f -name "*${DEVICE}*.zip" \
+    | grep -Ev "ota|symbol|target_files" \
+    | sort -r \
+    | head -n 1)
 
 if [[ ! -f "$ROM_ZIP" ]]; then
     log "ERROR: ROM ZIP not found"
@@ -84,22 +94,29 @@ SERVER=$(curl -s https://api.gofile.io/servers | jq -r '.data.servers[0].name')
 
 upload() {
     [[ -f "$1" ]] || { echo "N/A"; return; }
+
     curl -s -F "file=@$1" "https://${SERVER}.gofile.io/uploadFile" \
         | jq -r '.data.downloadPage' 2>/dev/null
 }
 
 sep
-log "Uploading files to GoFile..."
+log "Uploading files to GoFile (parallel)..."
 
-ROM_LINK=$(upload "$ROM_ZIP")
-BOOT_LINK=$(upload "$BOOT_IMG")
-VENDOR_BOOT_LINK=$(upload "$VENDOR_BOOT_IMG")
-DTBO_LINK=$(upload "$DTBO_IMG")
+TMP_DIR=$(mktemp -d)
 
-[[ -z "$ROM_LINK" ]] && log "WARN: ROM link empty"
-[[ -z "$BOOT_LINK" ]] && log "WARN: BOOT link empty"
-[[ -z "$VENDOR_BOOT_LINK" ]] && log "WARN: VENDOR_BOOT link empty"
-[[ -z "$DTBO_LINK" ]] && log "WARN: DTBO link empty"
+upload "$ROM_ZIP" > "$TMP_DIR/rom" &
+upload "$BOOT_IMG" > "$TMP_DIR/boot" &
+upload "$VENDOR_BOOT_IMG" > "$TMP_DIR/vendor_boot" &
+upload "$DTBO_IMG" > "$TMP_DIR/dtbo" &
+
+wait
+
+ROM_LINK=$(cat "$TMP_DIR/rom")
+BOOT_LINK=$(cat "$TMP_DIR/boot")
+VENDOR_BOOT_LINK=$(cat "$TMP_DIR/vendor_boot")
+DTBO_LINK=$(cat "$TMP_DIR/dtbo")
+
+rm -rf "$TMP_DIR"
 
 # ---------------- File info ----------------
 SIZE=$(du -h "$ROM_ZIP" | awk '{print $1}')
