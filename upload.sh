@@ -8,8 +8,8 @@
 
 # ---------------- CONFIGURATION ----------------
 
-BOT_TOKEN="${BOT_TOKEN:-}"
-CHAT_ID="-1002534976589"
+BOT_TOKEN="8617652855:AAFfFBA0kXwOGepBzcgfWuSAvq07iMLrtW4"
+CHAT_ID="-1003884099920"
 
 PRODUCT_BASE="out/target/product"
 
