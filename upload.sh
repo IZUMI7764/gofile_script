@@ -1,219 +1,263 @@
-#!/bin/bash
+```bash
+#!/usr/bin/env bash
 
 # ============================================================
-# ROM BUILD / UPLOAD TELEGRAM NOTIFIER
+#              DSU IMAGE PACKER AUTOMATION
+#             ROM BUILD • GOFILE • TELEGRAM
 # ============================================================
 
-BOT_TOKEN="8617652855:AAFfFBA0kXwOGepBzcgfWuSAvq07iMLrtW4"
-CHAT_ID="-1003884099920"
+# ---------------- CONFIGURATION ----------------
+
+BOT_TOKEN="${BOT_TOKEN:-}"
+CHAT_ID="-1002534976589"
+
+PRODUCT_BASE="out/target/product"
+
+# ---------------- TERMINAL COLORS ----------------
+
+if [[ -t 1 ]]; then
+    RED='\033[0;31m'
+    GREEN='\033[0;32m'
+    YELLOW='\033[0;33m'
+    BLUE='\033[0;34m'
+    CYAN='\033[0;36m'
+    MAGENTA='\033[0;35m'
+    WHITE='\033[1;37m'
+    GRAY='\033[0;90m'
+    BOLD='\033[1m'
+    RESET='\033[0m'
+else
+    RED='' GREEN='' YELLOW='' BLUE=''
+    CYAN='' MAGENTA='' WHITE=''
+    GRAY='' BOLD='' RESET=''
+fi
+
+set -o pipefail
 
 # ============================================================
-# Colors
-# ============================================================
-
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-CYAN='\033[0;36m'
-RESET='\033[0m'
-
-# ============================================================
-# Timing
-# ============================================================
-
-SCRIPT_START_EPOCH=$(date +%s)
-
-START_DATE=$(date '+%d %B %Y')
-START_TIME=$(date '+%H:%M:%S')
-START_DATETIME=$(date '+%d %B %Y, %H:%M:%S %Z')
-
-# ============================================================
-# Telegram
-# ============================================================
-
-send_telegram() {
-    curl -s -X POST \
-        "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
-        -d chat_id="${CHAT_ID}" \
-        --data-urlencode text="$1" \
-        -d parse_mode="HTML" \
-        > /dev/null
-}
-
-# ============================================================
-# Logging
+#                    TERMINAL INTERFACE
 # ============================================================
 
 log() {
-    echo -e "[$(date '+%H:%M:%S')] $1"
+    printf "%b\n" "${GRAY}[$(date '+%H:%M:%S')]${RESET} $1"
 }
 
-sep() {
-    echo "============================================================"
+info() {
+    printf "%b\n" "${GRAY}[$(date '+%H:%M:%S')]${RESET} ${BLUE}ℹ${RESET}  $1"
 }
 
 success() {
-    echo -e "${GREEN}[$(date '+%H:%M:%S')] ✓ $1${RESET}"
+    printf "%b\n" "${GRAY}[$(date '+%H:%M:%S')]${RESET} ${GREEN}✔${RESET}  $1"
 }
 
 warning() {
-    echo -e "${YELLOW}[$(date '+%H:%M:%S')] ⚠ $1${RESET}"
+    printf "%b\n" "${GRAY}[$(date '+%H:%M:%S')]${RESET} ${YELLOW}⚠${RESET}  $1"
 }
 
 error() {
-    echo -e "${RED}[$(date '+%H:%M:%S')] ✗ $1${RESET}"
+    printf "%b\n" "${GRAY}[$(date '+%H:%M:%S')]${RESET} ${RED}✖${RESET}  $1"
+}
+
+sep() {
+    echo -e "${GRAY}  ─────────────────────────────────────────────────${RESET}"
+}
+
+step() {
+    echo
+    echo -e "${CYAN}${BOLD}  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    echo -e "${WHITE}${BOLD}  ◆ $1${RESET}"
+    echo -e "${CYAN}${BOLD}  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+}
+
+banner() {
+    [[ -t 1 ]] && clear 2>/dev/null || true
+
+    echo -e "${CYAN}${BOLD}"
+    cat << 'EOF'
+      ██████╗ ███████╗██╗   ██╗
+      ██╔══██╗██╔════╝██║   ██║
+      ██║  ██║███████╗██║   ██║
+      ██║  ██║╚════██║██║   ██║
+      ██████╔╝███████║╚██████╔╝
+      ╚═════╝ ╚══════╝ ╚═════╝
+EOF
+    echo -e "${RESET}"
+
+    echo -e "  ${WHITE}${BOLD}DSU IMAGE PACKER${RESET} ${GRAY}│${RESET} ${MAGENTA}GOFILE UPLOADER${RESET}"
+    echo -e "  ${GRAY}Android ROM Build Automation${RESET}"
+    echo
+
+    sep
+
+    echo -e "  ${GREEN}●${RESET} ${WHITE}Build system initialized${RESET}"
+    echo -e "  ${GRAY}Started: $(date '+%d %b %Y | %H:%M:%S')${RESET}"
+
+    sep
+    echo
 }
 
 # ============================================================
-# Cleanup
+#                    TELEGRAM FUNCTIONS
 # ============================================================
 
-TMP_DIR=""
+send_telegram() {
+    local message="$1"
+    local response
 
-cleanup() {
-    [[ -n "$TMP_DIR" && -d "$TMP_DIR" ]] && rm -rf "$TMP_DIR"
-}
+    [[ -z "$BOT_TOKEN" ]] && return 1
+    command -v curl >/dev/null 2>&1 || return 1
+    command -v jq >/dev/null 2>&1 || return 1
 
-trap cleanup EXIT
+    response=$(curl -fsS \
+        --connect-timeout 15 \
+        --max-time 30 \
+        -X POST \
+        "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+        --data-urlencode "chat_id=${CHAT_ID}" \
+        --data-urlencode "text=${message}" \
+        -d "parse_mode=HTML" 2>/dev/null) || return 1
 
-# ============================================================
-# Duration formatter
-# ============================================================
-
-format_duration() {
-    local seconds="$1"
-
-    local days=$((seconds / 86400))
-    local hours=$(((seconds % 86400) / 3600))
-    local minutes=$(((seconds % 3600) / 60))
-    local secs=$((seconds % 60))
-
-    if [[ "$days" -gt 0 ]]; then
-        echo "${days}d ${hours}h ${minutes}m ${secs}s"
-    elif [[ "$hours" -gt 0 ]]; then
-        echo "${hours}h ${minutes}m ${secs}s"
-    elif [[ "$minutes" -gt 0 ]]; then
-        echo "${minutes}m ${secs}s"
-    else
-        echo "${secs}s"
-    fi
+    echo "$response" | jq -e '.ok == true' >/dev/null 2>&1
 }
 
 # ============================================================
-# File size
+#                    HTML FORMATTER
 # ============================================================
 
-file_size() {
-    if [[ -f "$1" ]]; then
-        du -h "$1" | awk '{print $1}'
-    else
-        echo "N/A"
-    fi
+html_escape() {
+    local value="$1"
+
+    value="${value//&/\&amp;}"
+    value="${value//</\&lt;}"
+    value="${value//>/\&gt;}"
+    value="${value//\"/\&quot;}"
+
+    printf '%s' "$value"
 }
-
-# ============================================================
-# Hash
-# ============================================================
-
-md5_hash() {
-    if [[ -f "$1" ]]; then
-        md5sum "$1" | awk '{print $1}'
-    else
-        echo "N/A"
-    fi
-}
-
-sha256_hash() {
-    if [[ -f "$1" ]]; then
-        sha256sum "$1" | awk '{print $1}'
-    else
-        echo "N/A"
-    fi
-}
-
-# ============================================================
-# Link formatter
-# ============================================================
 
 fmt_link() {
     local link="$1"
 
-    if [[ -n "$link" && "$link" != "N/A" && "$link" != "null" ]]; then
-        echo "<a href=\"$link\">Download</a>"
+    if [[ "$link" =~ ^https:// ]]; then
+        printf '<a href="%s">Download DSU Package</a>' \
+            "$(html_escape "$link")"
     else
-        echo "N/A"
+        printf 'N/A'
     fi
 }
 
 # ============================================================
-# Git information
+#                    FAILURE HANDLER
 # ============================================================
 
-git_info() {
-    local dir="$1"
+fail() {
+    local title="$1"
+    local details="$2"
 
-    if [[ -d "$dir/.git" ]]; then
-        local branch
-        local commit
+    echo
+    error "$title"
+    sep
 
-        branch=$(git -C "$dir" branch --show-current 2>/dev/null)
-        commit=$(git -C "$dir" rev-parse --short HEAD 2>/dev/null)
+    if [[ -n "$BOT_TOKEN" ]]; then
+        send_telegram \
+"<b>❌ DSU BUILD FAILED</b>
 
-        [[ -z "$branch" ]] && branch="detached"
+━━━━━━━━━━━━━━━━━━━━
 
-        echo "${branch}@${commit}"
-    else
-        echo "N/A"
+${details}
+
+━━━━━━━━━━━━━━━━━━━━
+
+<code>Android DSU Build Automation</code>" || true
     fi
+
+    exit 1
 }
 
 # ============================================================
-# Start
+#                    START
 # ============================================================
 
-clear
+banner
 
-sep
-echo -e "${CYAN}          ROM BUILD / UPLOAD SCRIPT${RESET}"
-sep
-
-log "Script started"
-log "Start date : $START_DATE"
-log "Start time : $START_TIME"
-log "Timezone   : $(date '+%Z (%z)')"
-log "Timestamp  : $(date +%s)"
-sep
+success "DSU packaging pipeline started."
 
 # ============================================================
-# Basic system information
+#                    DEPENDENCY CHECK
 # ============================================================
 
-HOSTNAME_INFO=$(hostname 2>/dev/null || echo "Unknown")
-BUILD_USER=$(whoami 2>/dev/null || echo "Unknown")
-HOST_KERNEL=$(uname -r 2>/dev/null || echo "Unknown")
-HOST_ARCH=$(uname -m 2>/dev/null || echo "Unknown")
+step "DEPENDENCY CHECK"
 
-if command -v lsb_release >/dev/null 2>&1; then
-    HOST_OS=$(lsb_release -ds 2>/dev/null)
-else
-    HOST_OS=$(grep '^PRETTY_NAME=' /etc/os-release 2>/dev/null \
-        | cut -d= -f2- \
-        | tr -d '"' || echo "Unknown")
+REQUIRED_COMMANDS=(
+    curl
+    jq
+    zip
+    unzip
+    md5sum
+    du
+    find
+    awk
+    grep
+    sort
+    sed
+    basename
+    date
+)
+
+MISSING_COMMANDS=()
+
+for cmd in "${REQUIRED_COMMANDS[@]}"; do
+    if command -v "$cmd" >/dev/null 2>&1; then
+        success "$cmd"
+    else
+        error "$cmd is missing"
+        MISSING_COMMANDS+=("$cmd")
+    fi
+done
+
+if [[ ${#MISSING_COMMANDS[@]} -gt 0 ]]; then
+
+    MISSING_TEXT=""
+
+    for cmd in "${MISSING_COMMANDS[@]}"; do
+        MISSING_TEXT+="• <code>${cmd}</code>"$'\n'
+    done
+
+    fail "Dependency check failed." \
+"<b>Missing dependencies:</b>
+
+${MISSING_TEXT}"
 fi
 
-log "Build host : $HOSTNAME_INFO"
-log "Build user : $BUILD_USER"
-log "Host OS    : $HOST_OS"
-log "Host kernel: $HOST_KERNEL"
-log "Host arch  : $HOST_ARCH"
+success "All dependencies are installed."
 
 # ============================================================
-# Detect device
+#                    TELEGRAM CONFIGURATION
 # ============================================================
 
-PRODUCT_BASE="out/target/product"
+step "TELEGRAM CONFIGURATION"
 
-log "Detecting device..."
+if [[ -z "$BOT_TOKEN" ]]; then
+    warning "Telegram token not configured."
+    warning "Notifications will be unavailable."
+else
+    success "Telegram configuration loaded."
+fi
+
+# ============================================================
+#                    DEVICE DETECTION
+# ============================================================
+
+step "DEVICE DETECTION"
+
+info "Scanning product directories..."
+
+if [[ ! -d "$PRODUCT_BASE" ]]; then
+    fail "Product directory not found." \
+"Expected directory:
+
+<code>${PRODUCT_BASE}</code>"
+fi
 
 DEVICE=$(find "$PRODUCT_BASE" \
     -mindepth 1 \
@@ -222,464 +266,402 @@ DEVICE=$(find "$PRODUCT_BASE" \
     ! -name generic \
     ! -name obj \
     ! -name symbols \
-    -printf "%f\n" 2>/dev/null \
-    | head -n 1)
+    -printf '%f\n' \
+    | sort \
+    | sed -n '1p')
 
 PRODUCT_DIR="$PRODUCT_BASE/$DEVICE"
 
 if [[ -z "$DEVICE" || ! -d "$PRODUCT_DIR" ]]; then
+    fail "Device detection failed." \
+"Device directory was not detected inside:
 
-    error "Device directory not detected"
-
-    send_telegram \
-"<b>❌ BUILD FAILED</b>
-
-<b>Reason:</b> Device directory not detected
-<b>Time:</b> ${START_DATETIME}
-<b>Host:</b> ${HOSTNAME_INFO}"
-
-    exit 1
+<code>${PRODUCT_BASE}</code>"
 fi
 
-success "Device detected: $DEVICE"
+success "Device detected: ${WHITE}${BOLD}${DEVICE}${RESET}"
+info "Product directory: ${CYAN}${PRODUCT_DIR}${RESET}"
 
 # ============================================================
-# ROM ZIP
+#                    ROM ZIP DETECTION
 # ============================================================
 
-sep
-log "Searching for ROM ZIP..."
+step "ROM BUILD DISCOVERY"
+
+info "Searching for ROM build ZIP..."
 
 ROM_ZIP=$(find "$PRODUCT_DIR" \
+    -maxdepth 1 \
     -type f \
     -name "*${DEVICE}*.zip" \
-    | grep -Ev "ota|symbol|target_files" \
+    | grep -Eiv 'ota|symbol|target_files|DSU-' \
     | sort -r \
-    | head -n 1)
+    | sed -n '1p')
 
-if [[ ! -f "$ROM_ZIP" ]]; then
+if [[ -z "$ROM_ZIP" || ! -f "$ROM_ZIP" ]]; then
+    fail "ROM build ZIP not found." \
+"Device:
 
-    error "ROM ZIP not found"
+<code>${DEVICE}</code>
 
-    send_telegram \
-"<b>❌ BUILD FAILED</b>
-
-<b>Reason:</b> ROM ZIP not found
-<b>Device:</b> ${DEVICE}
-<b>Time:</b> ${START_DATETIME}
-<b>Host:</b> ${HOSTNAME_INFO}"
-
-    exit 1
+No matching ROM ZIP was found."
 fi
 
-ZIP_NAME=$(basename "$ROM_ZIP")
+ROM_FILENAME=$(basename "$ROM_ZIP")
+ROM_NAME="${ROM_FILENAME%.zip}"
 
-success "ROM ZIP found: $ZIP_NAME"
-
-# ============================================================
-# ROM metadata
-# ============================================================
-
-ROM_NAME=$(echo "$ZIP_NAME" \
-    | sed -E "s/-${DEVICE}.*//")
-
-if echo "$ZIP_NAME" | grep -qi "UNOFFICIAL"; then
-    BUILD_TYPE="Unofficial"
-elif echo "$ZIP_NAME" | grep -qi "OFFICIAL"; then
-    BUILD_TYPE="Official"
-else
-    BUILD_TYPE="Unknown"
-fi
+success "ROM build found."
+info "${WHITE}${ROM_FILENAME}${RESET}"
 
 # ============================================================
-# Android information
+#                    REQUIRED DSU IMAGES
 # ============================================================
 
-ANDROID_VERSION="Unknown"
-ANDROID_SDK="Unknown"
-BUILD_ID="Unknown"
-BUILD_FINGERPRINT="Unknown"
-
-if [[ -f "$PRODUCT_DIR/system/build.prop" ]]; then
-
-    ANDROID_VERSION=$(grep '^ro.build.version.release=' \
-        "$PRODUCT_DIR/system/build.prop" \
-        | head -n1 \
-        | cut -d= -f2-)
-
-    ANDROID_SDK=$(grep '^ro.build.version.sdk=' \
-        "$PRODUCT_DIR/system/build.prop" \
-        | head -n1 \
-        | cut -d= -f2-)
-
-    BUILD_ID=$(grep '^ro.build.id=' \
-        "$PRODUCT_DIR/system/build.prop" \
-        | head -n1 \
-        | cut -d= -f2-)
-
-    BUILD_FINGERPRINT=$(grep '^ro.build.fingerprint=' \
-        "$PRODUCT_DIR/system/build.prop" \
-        | head -n1 \
-        | cut -d= -f2-)
-
-fi
-
-# Fallback for newer build layouts
-
-if [[ "$ANDROID_VERSION" == "Unknown" ]]; then
-    ANDROID_VERSION=$(get_build_var PLATFORM_VERSION 2>/dev/null || echo "Unknown")
-fi
-
-if [[ "$ANDROID_SDK" == "Unknown" ]]; then
-    ANDROID_SDK=$(get_build_var PLATFORM_SDK_VERSION 2>/dev/null || echo "Unknown")
-fi
-
-if [[ "$BUILD_ID" == "Unknown" ]]; then
-    BUILD_ID=$(get_build_var BUILD_ID 2>/dev/null || echo "Unknown")
-fi
+SYSTEM_IMG="$PRODUCT_DIR/system.img"
+SYSTEM_EXT_IMG="$PRODUCT_DIR/system_ext.img"
+VENDOR_IMG="$PRODUCT_DIR/vendor.img"
+PRODUCT_IMG="$PRODUCT_DIR/product.img"
+ODM_IMG="$PRODUCT_DIR/odm.img"
 
 # ============================================================
-# Build number / date
+#                    IMAGE VALIDATION
 # ============================================================
 
-BUILD_DATE="Unknown"
-BUILD_DATE_UTC="Unknown"
+step "DSU IMAGE VALIDATION"
 
-if [[ -n "$(get_build_var BUILD_DATETIME 2>/dev/null)" ]]; then
-    BUILD_EPOCH=$(get_build_var BUILD_DATETIME 2>/dev/null)
+MISSING_IMAGES=()
 
-    if [[ "$BUILD_EPOCH" =~ ^[0-9]+$ ]]; then
-        BUILD_DATE=$(date -d "@${BUILD_EPOCH}" '+%d %B %Y, %H:%M:%S %Z' 2>/dev/null)
-        BUILD_DATE_UTC=$(date -u -d "@${BUILD_EPOCH}" '+%d %B %Y, %H:%M:%S UTC' 2>/dev/null)
+check_image() {
+    local image="$1"
+    local path="$2"
+    local size
+
+    if [[ -f "$path" ]]; then
+        size=$(du -h "$path" | awk '{print $1}')
+        success "${WHITE}${image}${RESET} ${GRAY}(${size})${RESET}"
+    else
+        error "${image} NOT FOUND"
+        MISSING_IMAGES+=("$image")
     fi
-fi
-
-# ============================================================
-# Images
-# ============================================================
-
-BOOT_IMG="$PRODUCT_DIR/boot.img"
-VENDOR_BOOT_IMG="$PRODUCT_DIR/vendor_boot.img"
-DTBO_IMG="$PRODUCT_DIR/dtbo.img"
-RECOVERY_IMG="$PRODUCT_DIR/recovery.img"
-VBMETA_IMG="$PRODUCT_DIR/vbmeta.img"
-
-# ============================================================
-# File information
-# ============================================================
-
-ROM_SIZE=$(file_size "$ROM_ZIP")
-BOOT_SIZE=$(file_size "$BOOT_IMG")
-VENDOR_BOOT_SIZE=$(file_size "$VENDOR_BOOT_IMG")
-DTBO_SIZE=$(file_size "$DTBO_IMG")
-RECOVERY_SIZE=$(file_size "$RECOVERY_IMG")
-VBMETA_SIZE=$(file_size "$VBMETA_IMG")
-
-MD5SUM=$(md5_hash "$ROM_ZIP")
-SHA256SUM=$(sha256_hash "$ROM_ZIP")
-
-# ============================================================
-# Git information
-# ============================================================
-
-DEVICE_TREE="device/*/${DEVICE}"
-VENDOR_TREE="vendor/*/${DEVICE}"
-KERNEL_TREE="kernel/*/*"
-
-DEVICE_GIT="N/A"
-VENDOR_GIT="N/A"
-KERNEL_GIT="N/A"
-
-DEVICE_PATH=$(find device -maxdepth 2 -type d -name "$DEVICE" 2>/dev/null | head -n1)
-
-if [[ -n "$DEVICE_PATH" ]]; then
-    DEVICE_GIT=$(git_info "$DEVICE_PATH")
-fi
-
-VENDOR_PATH=$(find vendor -maxdepth 2 -type d -name "$DEVICE" 2>/dev/null | head -n1)
-
-if [[ -n "$VENDOR_PATH" ]]; then
-    VENDOR_GIT=$(git_info "$VENDOR_PATH")
-fi
-
-KERNEL_PATH=$(find kernel -mindepth 2 -maxdepth 2 -type d 2>/dev/null | head -n1)
-
-if [[ -n "$KERNEL_PATH" ]]; then
-    KERNEL_GIT=$(git_info "$KERNEL_PATH")
-fi
-
-# ============================================================
-# Disk information
-# ============================================================
-
-DISK_AVAILABLE=$(df -h "$PRODUCT_DIR" 2>/dev/null \
-    | awk 'NR==2 {print $4}')
-
-DISK_USED=$(df -h "$PRODUCT_DIR" 2>/dev/null \
-    | awk 'NR==2 {print $5}')
-
-# ============================================================
-# GoFile
-# ============================================================
-
-sep
-log "Fetching GoFile server..."
-
-SERVER=$(curl -s --max-time 20 \
-    https://api.gofile.io/servers \
-    | jq -r '.data.servers[0].name' 2>/dev/null)
-
-if [[ -z "$SERVER" || "$SERVER" == "null" ]]; then
-
-    error "Unable to fetch GoFile server"
-
-    send_telegram \
-"<b>❌ UPLOAD FAILED</b>
-
-<b>Reason:</b> Unable to fetch GoFile server
-<b>ROM:</b> ${ROM_NAME}
-<b>Device:</b> ${DEVICE}
-<b>Time:</b> $(date '+%d %B %Y, %H:%M:%S %Z')"
-
-    exit 1
-fi
-
-success "GoFile server: $SERVER"
-
-# ============================================================
-# Upload function
-# ============================================================
-
-upload() {
-
-    local FILE="$1"
-    local OUTPUT="$2"
-
-    if [[ ! -f "$FILE" ]]; then
-        echo "N/A" > "$OUTPUT"
-        return
-    fi
-
-    local RESULT
-
-    RESULT=$(curl -s \
-        --max-time 3600 \
-        -F "file=@${FILE}" \
-        "https://${SERVER}.gofile.io/uploadFile")
-
-    echo "$RESULT" \
-        | jq -r '.data.downloadPage // "N/A"' \
-        > "$OUTPUT"
 }
 
+check_image "system.img" "$SYSTEM_IMG"
+check_image "system_ext.img" "$SYSTEM_EXT_IMG"
+check_image "vendor.img" "$VENDOR_IMG"
+check_image "product.img" "$PRODUCT_IMG"
+check_image "odm.img" "$ODM_IMG"
+
+if [[ ${#MISSING_IMAGES[@]} -gt 0 ]]; then
+
+    MISSING_TEXT=""
+
+    for image in "${MISSING_IMAGES[@]}"; do
+        MISSING_TEXT+="❌ ${image}"$'\n'
+    done
+
+    fail "Required DSU images are missing." \
+"<b>DEVICE:</b> <code>${DEVICE}</code>
+
+<b>ROM:</b> <code>$(html_escape "$ROM_FILENAME")</code>
+
+<b>Missing images:</b>
+
+<code>${MISSING_TEXT}</code>
+
+DSU package was NOT created."
+fi
+
+success "All required DSU images found."
+
 # ============================================================
-# Parallel uploads
+#                    CREATE DSU ZIP
 # ============================================================
+
+step "PACKAGE GENERATION"
+
+PRODUCT_DIR_ABS="$(cd "$PRODUCT_DIR" && pwd -P)"
+
+DSU_ZIP="${PRODUCT_DIR_ABS}/DSU-${ROM_FILENAME}"
+
+info "Output package:"
+info "${CYAN}${DSU_ZIP}${RESET}"
+
+# Remove previous package
+
+if [[ -f "$DSU_ZIP" ]]; then
+    warning "Removing existing DSU package..."
+    rm -f "$DSU_ZIP"
+fi
+
+START_TIME=$(date +%s)
+
+info "Compressing DSU images..."
+info "Compression level: 9"
+
+cd "$PRODUCT_DIR_ABS" || {
+    fail "Directory access failed." \
+"Could not enter:
+
+<code>$(html_escape "$PRODUCT_DIR_ABS")</code>"
+}
+
+zip -q -9 \
+    "$DSU_ZIP" \
+    system.img \
+    system_ext.img \
+    vendor.img \
+    product.img \
+    odm.img
+
+ZIP_STATUS=$?
+
+END_TIME=$(date +%s)
+BUILD_TIME=$((END_TIME - START_TIME))
+
+if [[ "$ZIP_STATUS" -ne 0 || ! -f "$DSU_ZIP" ]]; then
+    rm -f "$DSU_ZIP"
+
+    fail "DSU ZIP creation failed." \
+"Device: <code>${DEVICE}</code>
+
+ROM: <code>$(html_escape "$ROM_FILENAME")</code>
+
+Failed while compressing DSU images."
+fi
+
+success "DSU package created successfully."
+
+# ============================================================
+#                    PACKAGE INFORMATION
+# ============================================================
+
+step "PACKAGE INFORMATION"
+
+DSU_NAME=$(basename "$DSU_ZIP")
+DSU_SIZE=$(du -h "$DSU_ZIP" | awk '{print $1}')
+DSU_MD5=$(md5sum "$DSU_ZIP" | awk '{print $1}')
+
+success "Package: ${DSU_NAME}"
+info "Size: ${WHITE}${DSU_SIZE}${RESET}"
+info "MD5: ${WHITE}${DSU_MD5}${RESET}"
+info "Compression time: ${BUILD_TIME}s"
+
+# ============================================================
+#                    ZIP INTEGRITY CHECK
+# ============================================================
+
+step "PACKAGE INTEGRITY"
+
+info "Verifying ZIP archive..."
+
+if ! unzip -t "$DSU_ZIP" >/dev/null 2>&1; then
+
+    rm -f "$DSU_ZIP"
+
+    fail "ZIP integrity verification failed." \
+"Device: <code>${DEVICE}</code>
+
+Package: <code>${DSU_NAME}</code>
+
+The generated archive failed integrity verification.
+
+Invalid package has been removed."
+fi
+
+success "ZIP integrity verified."
+
+# ============================================================
+#                    GOFILE SERVER
+# ============================================================
+
+step "GOFILE SERVER"
+
+info "Fetching GoFile upload server..."
+
+SERVER_RESPONSE=$(curl -fsS \
+    --retry 3 \
+    --retry-delay 2 \
+    --connect-timeout 15 \
+    --max-time 30 \
+    "https://api.gofile.io/servers" 2>/dev/null)
+
+if [[ -z "$SERVER_RESPONSE" ]]; then
+    fail "GoFile server request failed." \
+"Could not connect to the GoFile servers API."
+fi
+
+SERVER=$(echo "$SERVER_RESPONSE" \
+    | jq -er '.data.servers[0].name // empty' 2>/dev/null)
+
+if [[ -z "$SERVER" || "$SERVER" == "null" ]]; then
+    fail "GoFile server unavailable." \
+"Could not obtain a valid upload server."
+fi
+
+if [[ ! "$SERVER" =~ ^[a-zA-Z0-9-]+$ ]]; then
+    fail "Invalid GoFile server response." \
+"The server returned an unexpected server name."
+fi
+
+success "Upload server: ${WHITE}${SERVER}${RESET}"
+
+# ============================================================
+#                    GOFILE UPLOAD
+# ============================================================
+
+step "CLOUD UPLOAD"
+
+info "Uploading DSU package..."
+info "File: ${WHITE}${DSU_NAME}${RESET}"
+info "Size: ${WHITE}${DSU_SIZE}${RESET}"
+warning "Please wait while the upload completes..."
+
+UPLOAD_RESPONSE=$(curl -fsS \
+    --retry 3 \
+    --retry-delay 3 \
+    --connect-timeout 30 \
+    --max-time 0 \
+    -F "file=@${DSU_ZIP}" \
+    "https://${SERVER}.gofile.io/uploadFile" 2>/dev/null)
+
+if [[ -z "$UPLOAD_RESPONSE" ]]; then
+    fail "GoFile upload failed." \
+"Device: <code>${DEVICE}</code>
+
+Package: <code>${DSU_NAME}</code>
+
+No valid response was received from GoFile."
+fi
+
+UPLOAD_STATUS=$(echo "$UPLOAD_RESPONSE" \
+    | jq -r '.status // empty' 2>/dev/null)
+
+DSU_LINK=$(echo "$UPLOAD_RESPONSE" \
+    | jq -r '.data.downloadPage // empty' 2>/dev/null)
+
+if [[ "$UPLOAD_STATUS" != "ok" || ! "$DSU_LINK" =~ ^https:// ]]; then
+
+    API_ERROR=$(echo "$UPLOAD_RESPONSE" \
+        | jq -r '.message // .status // "Unknown upload error"' 2>/dev/null)
+
+    fail "GoFile upload failed." \
+"Device: <code>${DEVICE}</code>
+
+Package: <code>${DSU_NAME}</code>
+
+GoFile response:
+
+<code>$(html_escape "$API_ERROR")</code>"
+fi
+
+success "GoFile upload successful."
+info "Download link: ${CYAN}${DSU_LINK}${RESET}"
+
+# ============================================================
+#                    TELEGRAM NOTIFICATION
+# ============================================================
+
+step "TELEGRAM NOTIFICATION"
+
+info "Preparing build notification..."
+
+ROM_HTML=$(html_escape "$ROM_NAME")
+DEVICE_HTML=$(html_escape "$DEVICE")
+PACKAGE_HTML=$(html_escape "$DSU_NAME")
+
+TELEGRAM_MESSAGE="
+🚀 <b>DSU PACKAGE GENERATED SUCCESSFULLY</b>
+
+━━━━━━━━━━━━━━━━━━━━
+
+📱 <b>BUILD INFORMATION</b>
+
+├ <b>ROM:</b> ${ROM_HTML}
+├ <b>DEVICE:</b> <code>${DEVICE_HTML}</code>
+└ <b>PACKAGE:</b> <code>${PACKAGE_HTML}</code>
+
+━━━━━━━━━━━━━━━━━━━━
+
+📦 <b>PACKAGE DETAILS</b>
+
+├ <b>SIZE:</b> ${DSU_SIZE}
+├ <b>MD5:</b>
+│ <code>${DSU_MD5}</code>
+└ <b>BUILD TIME:</b> ${BUILD_TIME}s
+
+━━━━━━━━━━━━━━━━━━━━
+
+🗂 <b>INCLUDED IMAGES</b>
+
+<code>
+├ system.img
+├ system_ext.img
+├ vendor.img
+├ product.img
+└ odm.img
+</code>
+
+━━━━━━━━━━━━━━━━━━━━
+
+🌐 <b>DOWNLOAD PACKAGE</b>
+
+⬇️ $(fmt_link "$DSU_LINK")
+
+━━━━━━━━━━━━━━━━━━━━
+
+<blockquote>✅ ZIP integrity verified
+☁️ Uploaded to GoFile
+📦 DSU package ready</blockquote>
+
+<code>Android DSU Build Automation</code>
+"
+
+if send_telegram "$TELEGRAM_MESSAGE"; then
+    success "Telegram notification delivered."
+    TELEGRAM_STATUS="Sent"
+else
+    warning "Telegram notification could not be delivered."
+    TELEGRAM_STATUS="Failed"
+fi
+
+# ============================================================
+#                    BUILD COMPLETED
+# ============================================================
+
+step "BUILD COMPLETED"
+
+echo
+
+success "DSU package created successfully."
+success "Package uploaded to GoFile."
+
+if [[ "$TELEGRAM_STATUS" == "Sent" ]]; then
+    success "Telegram notification sent."
+else
+    warning "Telegram notification failed."
+fi
+
+echo
+sep
+
+echo -e "  ${GREEN}${BOLD}✔ ALL TASKS COMPLETED${RESET}"
+echo
+echo -e "  ${GRAY}DEVICE:${RESET}      ${WHITE}${DEVICE}${RESET}"
+echo -e "  ${GRAY}ROM:${RESET}         ${WHITE}${ROM_NAME}${RESET}"
+echo -e "  ${GRAY}PACKAGE:${RESET}     ${WHITE}${DSU_NAME}${RESET}"
+echo -e "  ${GRAY}SIZE:${RESET}        ${WHITE}${DSU_SIZE}${RESET}"
+echo -e "  ${GRAY}MD5:${RESET}         ${WHITE}${DSU_MD5}${RESET}"
+echo -e "  ${GRAY}DURATION:${RESET}    ${WHITE}${BUILD_TIME}s${RESET}"
+echo -e "  ${GRAY}TELEGRAM:${RESET}    ${WHITE}${TELEGRAM_STATUS}${RESET}"
 
 sep
-log "Uploading files to GoFile..."
-log "Uploads are running in parallel."
 
-TMP_DIR=$(mktemp -d)
-
-UPLOAD_START=$(date +%s)
-
-upload "$ROM_ZIP" "$TMP_DIR/rom" &
-PID_ROM=$!
-
-upload "$BOOT_IMG" "$TMP_DIR/boot" &
-PID_BOOT=$!
-
-upload "$VENDOR_BOOT_IMG" "$TMP_DIR/vendor_boot" &
-PID_VENDOR_BOOT=$!
-
-upload "$DTBO_IMG" "$TMP_DIR/dtbo" &
-PID_DTBO=$!
-
-upload "$RECOVERY_IMG" "$TMP_DIR/recovery" &
-PID_RECOVERY=$!
-
-upload "$VBMETA_IMG" "$TMP_DIR/vbmeta" &
-PID_VBMETA=$!
-
-wait "$PID_ROM"
-ROM_STATUS=$?
-
-wait "$PID_BOOT"
-BOOT_STATUS=$?
-
-wait "$PID_VENDOR_BOOT"
-VENDOR_BOOT_STATUS=$?
-
-wait "$PID_DTBO"
-DTBO_STATUS=$?
-
-wait "$PID_RECOVERY"
-RECOVERY_STATUS=$?
-
-wait "$PID_VBMETA"
-VBMETA_STATUS=$?
-
-UPLOAD_END=$(date +%s)
-
-UPLOAD_DURATION=$((UPLOAD_END - UPLOAD_START))
-
-ROM_LINK=$(cat "$TMP_DIR/rom" 2>/dev/null)
-BOOT_LINK=$(cat "$TMP_DIR/boot" 2>/dev/null)
-VENDOR_BOOT_LINK=$(cat "$TMP_DIR/vendor_boot" 2>/dev/null)
-DTBO_LINK=$(cat "$TMP_DIR/dtbo" 2>/dev/null)
-RECOVERY_LINK=$(cat "$TMP_DIR/recovery" 2>/dev/null)
-VBMETA_LINK=$(cat "$TMP_DIR/vbmeta" 2>/dev/null)
-
-[[ -z "$ROM_LINK" ]] && ROM_LINK="N/A"
-[[ -z "$BOOT_LINK" ]] && BOOT_LINK="N/A"
-[[ -z "$VENDOR_BOOT_LINK" ]] && VENDOR_BOOT_LINK="N/A"
-[[ -z "$DTBO_LINK" ]] && DTBO_LINK="N/A"
-[[ -z "$RECOVERY_LINK" ]] && RECOVERY_LINK="N/A"
-[[ -z "$VBMETA_LINK" ]] && VBMETA_LINK="N/A"
-
-success "Uploads finished in $(format_duration "$UPLOAD_DURATION")"
+echo
+echo -e "  ${MAGENTA}${BOLD}Thank you for using DSU Image Packer!${RESET}"
+echo -e "  ${GRAY}Android ROM Build Automation${RESET}"
+echo
 
 # ============================================================
-# Final timing
+#                    END OF SCRIPT
 # ============================================================
-
-SCRIPT_END_EPOCH=$(date +%s)
-TOTAL_DURATION=$((SCRIPT_END_EPOCH - SCRIPT_START_EPOCH))
-
-END_DATETIME=$(date '+%d %B %Y, %H:%M:%S %Z')
-END_DATE=$(date '+%d %B %Y')
-END_TIME=$(date '+%H:%M:%S')
-
-# ============================================================
-# Upload status
-# ============================================================
-
-UPLOADS_OK=0
-UPLOADS_FAILED=0
-
-for STATUS in \
-    "$ROM_STATUS" \
-    "$BOOT_STATUS" \
-    "$VENDOR_BOOT_STATUS" \
-    "$DTBO_STATUS" \
-    "$RECOVERY_STATUS" \
-    "$VBMETA_STATUS"
-do
-    if [[ "$STATUS" -eq 0 ]]; then
-        ((UPLOADS_OK++))
-    else
-        ((UPLOADS_FAILED++))
-    fi
-done
-
-# ============================================================
-# Telegram
-# ============================================================
-
-sep
-log "Sending Telegram notification..."
-
-TELEGRAM_MESSAGE="📦 <b>ROM COMPILED SUCCESSFULLY!</b>
-
-━━━━━━━━━━━━━━━━━━━━
-📱 <b>ROM INFORMATION</b>
-━━━━━━━━━━━━━━━━━━━━
-
-• <b>ROM:</b> ${ROM_NAME}
-• <b>Device:</b> ${DEVICE}
-• <b>Build Type:</b> ${BUILD_TYPE}
-• <b>Android:</b> ${ANDROID_VERSION}
-• <b>SDK:</b> ${ANDROID_SDK}
-• <b>Build ID:</b> ${BUILD_ID}
-
-━━━━━━━━━━━━━━━━━━━━
-🕐 <b>BUILD TIME</b>
-━━━━━━━━━━━━━━━━━━━━
-
-• <b>Started:</b> ${START_DATETIME}
-• <b>Finished:</b> ${END_DATETIME}
-• <b>Duration:</b> $(format_duration "$TOTAL_DURATION")
-• <b>Unix Time:</b> ${SCRIPT_END_EPOCH}
-
-━━━━━━━━━━━━━━━━━━━━
-💾 <b>FILES</b>
-━━━━━━━━━━━━━━━━━━━━
-
-• <b>ROM:</b> ${ROM_SIZE}
-• <b>Boot:</b> ${BOOT_SIZE}
-• <b>Vendor Boot:</b> ${VENDOR_BOOT_SIZE}
-• <b>DTBO:</b> ${DTBO_SIZE}
-• <b>Recovery:</b> ${RECOVERY_SIZE}
-• <b>VBMeta:</b> ${VBMETA_SIZE}
-
-━━━━━━━━━━━━━━━━━━━━
-🔐 <b>CHECKSUMS</b>
-━━━━━━━━━━━━━━━━━━━━
-
-• <b>MD5:</b>
-<code>${MD5SUM}</code>
-
-• <b>SHA256:</b>
-<code>${SHA256SUM}</code>
-
-━━━━━━━━━━━━━━━━━━━━
-🌿 <b>SOURCE</b>
-━━━━━━━━━━━━━━━━━━━━
-
-• <b>Device:</b> ${DEVICE_GIT}
-• <b>Vendor:</b> ${VENDOR_GIT}
-• <b>Kernel:</b> ${KERNEL_GIT}
-
-━━━━━━━━━━━━━━━━━━━━
-🖥️ <b>BUILD HOST</b>
-━━━━━━━━━━━━━━━━━━━━
-
-• <b>Host:</b> ${HOSTNAME_INFO}
-• <b>User:</b> ${BUILD_USER}
-• <b>OS:</b> ${HOST_OS}
-• <b>Kernel:</b> ${HOST_KERNEL}
-• <b>Arch:</b> ${HOST_ARCH}
-
-━━━━━━━━━━━━━━━━━━━━
-💿 <b>DISK</b>
-━━━━━━━━━━━━━━━━━━━━
-
-• <b>Used:</b> ${DISK_USED}
-• <b>Available:</b> ${DISK_AVAILABLE}
-
-━━━━━━━━━━━━━━━━━━━━
-📤 <b>UPLOADS</b>
-━━━━━━━━━━━━━━━━━━━━
-
-• <b>Server:</b> ${SERVER}
-• <b>Upload Time:</b> $(format_duration "$UPLOAD_DURATION")
-• <b>Successful:</b> ${UPLOADS_OK}
-• <b>Failed:</b> ${UPLOADS_FAILED}
-
-━━━━━━━━━━━━━━━━━━━━
-⬇️ <b>DOWNLOADS</b>
-━━━━━━━━━━━━━━━━━━━━
-
-• <b>ROM:</b> $(fmt_link "$ROM_LINK")
-• <b>BOOT:</b> $(fmt_link "$BOOT_LINK")
-• <b>VENDOR_BOOT:</b> $(fmt_link "$VENDOR_BOOT_LINK")
-• <b>DTBO:</b> $(fmt_link "$DTBO_LINK")
-• <b>RECOVERY:</b> $(fmt_link "$RECOVERY_LINK")
-• <b>VBMETA:</b> $(fmt_link "$VBMETA_LINK")
-
-━━━━━━━━━━━━━━━━━━━━
-📦 <b>ZIP</b>
-━━━━━━━━━━━━━━━━━━━━
-
-<code>${ZIP_NAME}</code>
-
-━━━━━━━━━━━━━━━━━━━━
-✅ <b>BUILD FINISHED</b>
-━━━━━━━━━━━━━━━━━━━━
-
-Build completed successfully 🚀"
-
-send_telegram "$TELEGRAM_MESSAGE"
-
-success "Telegram notification sent"
+```
